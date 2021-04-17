@@ -11,6 +11,7 @@ import pathlib
 import time
 import shutil
 import hashlib
+import traceback
 
 from pathlib import Path
 from datetime import datetime
@@ -87,7 +88,7 @@ class Sync:
         return self._folderIn
 
     def get_folderOut(self):
-        return self._folderIn
+        return self._folderOut
 
 
 class Location:
@@ -161,8 +162,8 @@ class DataStore:
     CREATE_SYNC = "INSERT OR IGNORE INTO {} (folderIn, folderOut) VALUES (?,?);".format(SYNC_TB)
 
     LOC_TB = "location"
-    CREATE_LOC = "INSERT INTO {} (folderIn, folderOut, folderInLocation, folderInHash, folderInDateCreated) VALUES (?,?,?,?,?);".format(LOC_TB)
-    READ_LOC = "SELECT * FROM {} WHERE folderIn = ? folderOut = ? folderId = ?;".format(LOC_TB)
+    CREATE_LOC = "INSERT INTO {} (folderIn, folderOut, folderInLocation, folderInId) VALUES (?,?,?,?);".format(LOC_TB)
+    READ_LOC = "SELECT * FROM {} WHERE folderIn = ? AND folderOut = ? AND folderInId = ?;".format(LOC_TB)
     UPDATE_LOC = "UPDATE {} SET folderInLocation = ? WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;".format(LOC_TB)
     REMOVE_LOC = "DELETE FROM {} WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;".format(LOC_TB)
 
@@ -226,14 +227,14 @@ class FolderSync:
     """
 
     def __init__(self,
-                 folderIn="F:/test stuff/syncTest/in",
+                 folderIn="F:\\test stuff\\syncTest\\in",
                  #folderOut="F:/test stuff/syncTest/out",
-                 folderOut="\\\\DESKTOP-UPOMV61\\Users\\lucas\Desktop\\test",
+                 folderOut="F:\\test stuff\\syncTest\\out",
                  frequency=2):
 
         # set vals
-        self.folderIn = folderIn
-        self.folderOut = folderOut
+        self.folderIn = EXT_PATH + folderIn
+        self.folderOut = EXT_PATH + folderOut
         self.sync = Sync(self.folderIn, self.folderOut)
         self.frequency = frequency
         self.dataStore = DataStore(DatabaseConnector())
@@ -244,7 +245,7 @@ class FolderSync:
         1. iterate folderIn
             for each file/folder:
                 1.5 File actions:
-                - if in folderIn, not in folderOut, -> create
+                - if in folderIn, not in folderOut, -> create or check if moved (modified path)
                 - if in folderIn, in folderOut, if last modified > folderOut last modified -> update
         2. iterate folderOut locations
             for each location:
@@ -257,65 +258,82 @@ class FolderSync:
         # run forever
         while True:
 
-            self.get_descedents(self.folderIn, self.handle_inFile)
-            self.get_descedents(self.folderOut, self.handle_outFile)
+            for filee in get_descedents(self.folderIn):
+                try:
+                    self.handle_inFile(filee)
+                except Exception:
+                    print("failed to deal with folderIn file:" + filee)
+                    traceback.print_exc()
 
-            time.sleep(self.frequency)
+            for filee in get_descedents(self.folderOut):
+                try:
+                    self.handle_outFile(filee)
+                except Exception:
+                    print("failed to deal with folderOut file:" + filee)
+                    traceback.print_exc()
 
-    def get_descedents(self, dirIn, function):
-        for root, dirs, files in os.walk(dirIn):
-            for name in files:
-                function(os.path.join(root, name))
-            for name in dirs:
-                function(os.path.join(root, name))
+            if self.frequency:
+                time.sleep(self.frequency)
+            else:
+                break
 
     def handle_inFile(self, inFilepath):
         # build vars
         outFilepath = self._build_sync_filepath(self.folderIn, self.folderOut, inFilepath)
-        
+
         # update filestats based on last modified time
         if os.path.exists(inFilepath) and os.path.exists(outFilepath):
             location = Location(self.sync, inFilepath, get_file_id(inFilepath))
             if os.stat(inFilepath).st_mtime != os.stat(outFilepath).st_mtime:
                 if os.path.isdir(outFilepath):
+                    # cp stat
                     shutil.copystat(inFilepath, outFilepath)
                 else:
+                    # cp file contents
                     shutil.copy2(inFilepath, outFilepath)
+
         # create or (updated name)
         if not(os.path.exists(outFilepath)):
-            # also need to handle the 'updated' case here as well, as to not create any new files
-            # delete OR updated names (based on dir hash and creation time to see if it exists already)
-            # if db has more than one hash == in the same sync, then ignore
-            # https://stackoverflow.com/questions/24937495/how-can-i-calculate-a-hash-for-a-filesystem-directory-using-python
-            # os.rename(outFilepath, _get_parent(outFilepath) + '/' + _get_filename(inFilepath))
+
             location = Location(self.sync, inFilepath, get_file_id(inFilepath))
+
             # modify
             priorLocation = self.dataStore.read_location(self.sync, get_file_id(inFilepath))
             if priorLocation:
                 # map old inFileLocation to old outFileLocation
                 oldOutfile = self._build_sync_filepath(self.folderIn, self.folderOut, priorLocation.get_folderInLocation())
-                # move old outFile to new outfile
-                shutil.move(oldOutfile, outFilepath)
-                # track move in db
-                oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldOutfile))
-                self.dataStore.update_location(oldLocation, location)
-                if os.path.isdir(inFilepath):
-                    for oldfileLoc in get_descedents(inFilepath):
-                        oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldfileLoc))
-                        self.dataStore.update_location(oldLocation, location)
+                if os.path.exists(oldOutfile):
+                    # move old outFile to new outfile
+                    shutil.move(oldOutfile, outFilepath)
+                    # track move in db
+                    oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldOutfile))
+                    self.dataStore.update_location(oldLocation, location)
+                    if os.path.isdir(inFilepath):
+                        for oldfileLoc in get_descedents(inFilepath):
+                            oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldfileLoc))
+                            self.dataStore.update_location(oldLocation, location)
+                    # return early
+                    return None
 
             # create
             if os.path.isdir(inFilepath):
+                # cp
                 shutil.copytree(inFilepath, outFilepath)
                 # track create in db
                 self.dataStore.create_location(location)
                 for fileLoc in get_descedents(inFilepath):
                     self.dataStore.create_location(Location(self.sync, fileLoc, get_file_id(fileLoc)))
             else:
+                # cp
                 shutil.copy2(inFilepath, outFilepath)
                 # track create in db
                 self.dataStore.create_location(location)
 
+    """
+    Issue here if change to filename WHILE RUNNING handle_outFile
+    - No way to trace back and see if the root in folder exists
+    - Must make a way to only work on second shot (via db table)?
+    """
     def handle_outFile(self, outFilepath):
         # build in
         inFilepath = self._build_sync_filepath(self.folderOut, self.folderIn, outFilepath)
@@ -323,13 +341,17 @@ class FolderSync:
         if not(os.path.exists(inFilepath)) and os.path.exists(outFilepath):
             oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, outFilepath))
             if os.path.isdir(outFilepath):
+                # rm
                 shutil.rmtree(outFilepath)
+                # track rm in db
                 self.dataStore.remove_location(oldLocation)
                 for oldfileLoc in get_descedents(inFilepath):
                     oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldfileLoc))
                     self.dataStore.remove_location(oldLocation)
             else:
+                # rm
                 os.remove(outFilepath)
+                # track rm in db
                 self.dataStore.remove_location(oldLocation)
 
     def _build_sync_filepath(self, rootDirIn, rootDirOut, filepathIn):
