@@ -52,6 +52,12 @@ def _get_parent(filepath):
     return str(Path(filepath).parent)
 
 
+def make_parent_if_not_exists(filepath):
+    parentOutFilepath = _get_parent(filepath)
+    if not(os.path.isdir(parentOutFilepath)):
+        os.makedirs(parentOutFilepath)
+
+
 def get_file_id(filepath):
     return popen('fsutil file queryfileid "{}"'.format(filepath)).read()
 
@@ -159,13 +165,19 @@ class DatabaseConnector:
 class DataStore:
 
     SYNC_TB = "sync"
-    CREATE_SYNC = "INSERT OR IGNORE INTO {} (folderIn, folderOut) VALUES (?,?);".format(SYNC_TB)
+    CREATE_SYNC = """INSERT OR IGNORE INTO {}
+                     (folderIn, folderOut) VALUES (?,?);""".format(SYNC_TB)
 
     LOC_TB = "location"
-    CREATE_LOC = "INSERT INTO {} (folderIn, folderOut, folderInLocation, folderInId) VALUES (?,?,?,?);".format(LOC_TB)
-    READ_LOC = "SELECT * FROM {} WHERE folderIn = ? AND folderOut = ? AND folderInId = ?;".format(LOC_TB)
-    UPDATE_LOC = "UPDATE {} SET folderInLocation = ? WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;".format(LOC_TB)
-    REMOVE_LOC = "DELETE FROM {} WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;".format(LOC_TB)
+    CREATE_LOC = """INSERT INTO {}
+                    (folderIn, folderOut, folderInLocation, folderInId)
+                    VALUES (?,?,?,?);""".format(LOC_TB)
+    READ_LOC = """SELECT * FROM {}
+                  WHERE folderIn = ? AND folderOut = ? AND folderInId = ?;""".format(LOC_TB)
+    UPDATE_LOC = """UPDATE {} SET
+                    folderInLocation = ? WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;""".format(LOC_TB)
+    REMOVE_LOC = """DELETE FROM {}
+                    WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;""".format(LOC_TB)
 
     def __init__(self, dbConn):
         self.dbConn = dbConn
@@ -224,24 +236,7 @@ class FolderSync:
     Keeps the folderOut in sync with the folderIn.
     Frequency (seconds) is the sleep time after run.
     Moves are tracked by fileid (via fsutil file queryfileid)
-    """
-
-    def __init__(self,
-                 folderIn="F:\\test stuff\\syncTest\\in",
-                 #folderOut="F:/test stuff/syncTest/out",
-                 folderOut="F:\\test stuff\\syncTest\\out",
-                 frequency=2):
-
-        # set vals
-        self.folderIn = EXT_PATH + folderIn
-        self.folderOut = EXT_PATH + folderOut
-        self.sync = Sync(self.folderIn, self.folderOut)
-        self.frequency = frequency
-        self.dataStore = DataStore(DatabaseConnector())
-
-    def run(self):
-        """
-        Steps:
+    Steps:
         1. iterate folderIn
             for each file/folder:
                 1.5 File actions:
@@ -251,7 +246,26 @@ class FolderSync:
             for each location:
                 2.5 folderOut actions:
                 - if in folderOut, not in folderIn, -> delete
-        """
+    """
+
+    def __init__(self,
+                 folderIn="F:\\test stuff\\syncTest\\in",
+                 folderOut="F:\\test stuff\\syncTest\\out",
+                 frequency=2):
+
+        # set vals
+        self.folderIn = EXT_PATH + folderIn
+        self.folderOut = EXT_PATH + folderOut
+        self.sync = Sync(self.folderIn, self.folderOut)
+        self.frequency = frequency
+        self.dataStore = DataStore(DatabaseConnector())
+        self.waitForDelete = set()  # waits until next run to delete
+
+    # Main Loop
+    # =================================================================
+
+    def run(self):
+
         # make sync
         self.dataStore.create_sync(self.sync)
 
@@ -277,70 +291,113 @@ class FolderSync:
             else:
                 break
 
+    # Handlers
+    # =================================================================
+
+    # Infile handler
+    # ==================================
+
     def handle_inFile(self, inFilepath):
+        """ handles each file in the src directory to decide on creates/updates """
         # build vars
         outFilepath = self._build_sync_filepath(self.folderIn, self.folderOut, inFilepath)
 
-        # update filestats based on last modified time
+        # update file
         if os.path.exists(inFilepath) and os.path.exists(outFilepath):
-            location = Location(self.sync, inFilepath, get_file_id(inFilepath))
-            if os.stat(inFilepath).st_mtime != os.stat(outFilepath).st_mtime:
-                if os.path.isdir(outFilepath):
-                    # cp stat
-                    shutil.copystat(inFilepath, outFilepath)
-                else:
-                    # cp file contents
-                    shutil.copy2(inFilepath, outFilepath)
+            self.update_file(inFilepath, outFilepath)
 
-        # create or (updated name)
+        # create or move file/files
         if not(os.path.exists(outFilepath)):
 
             location = Location(self.sync, inFilepath, get_file_id(inFilepath))
-
-            # modify
             priorLocation = self.dataStore.read_location(self.sync, get_file_id(inFilepath))
+
             if priorLocation:
-                # map old inFileLocation to old outFileLocation
-                oldOutfile = self._build_sync_filepath(self.folderIn, self.folderOut, priorLocation.get_folderInLocation())
-                if os.path.exists(oldOutfile):
-                    # move old outFile to new outfile
-                    shutil.move(oldOutfile, outFilepath)
-                    # track move in db
-                    oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldOutfile))
-                    self.dataStore.update_location(oldLocation, location)
-                    if os.path.isdir(inFilepath):
-                        for oldfileLoc in get_descedents(inFilepath):
-                            oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldfileLoc))
-                            self.dataStore.update_location(oldLocation, location)
-                    # return early
-                    return None
-
-            # create
-            if os.path.isdir(inFilepath):
-                # cp
-                shutil.copytree(inFilepath, outFilepath)
-                # track create in db
-                self.dataStore.create_location(location)
-                for fileLoc in get_descedents(inFilepath):
-                    self.dataStore.create_location(Location(self.sync, fileLoc, get_file_id(fileLoc)))
+                # move file/files
+                self.move_file(inFilepath, outFilepath, location, priorLocation)
             else:
-                # cp
-                shutil.copy2(inFilepath, outFilepath)
-                # track create in db
-                self.dataStore.create_location(location)
+                # create file/files
+                self.create_file(inFilepath, outFilepath, location)
 
-    """
-    Issue here if change to filename WHILE RUNNING handle_outFile
-    - No way to trace back and see if the root in folder exists
-    - Must make a way to only work on second shot (via db table)?
-    """
-    def handle_outFile(self, outFilepath):
-        # build in
-        inFilepath = self._build_sync_filepath(self.folderOut, self.folderIn, outFilepath)
+    # Helpers
+    # ==================
 
-        if not(os.path.exists(inFilepath)) and os.path.exists(outFilepath):
-            oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, outFilepath))
+    def update_file(self, inFilepath, outFilepath):
+        # if modified times don't match, rectify
+        if os.stat(inFilepath).st_mtime != os.stat(outFilepath).st_mtime:
             if os.path.isdir(outFilepath):
+                shutil.copystat(inFilepath, outFilepath)
+            else:
+                shutil.copy2(inFilepath, outFilepath)
+
+    def create_file(self, inFilepath, outFilepath, location):
+        # make parent if not exists (only should happen if user edits while running)
+        make_parent_if_not_exists(outFilepath)
+        # make file
+        if os.path.isdir(inFilepath):
+            # cp
+            shutil.copytree(inFilepath, outFilepath)
+            # track create in db
+            self.dataStore.create_location(location)
+            for fileLoc in get_descedents(inFilepath):
+                self.dataStore.create_location(Location(self.sync, fileLoc, get_file_id(fileLoc)))
+        else:
+            # cp
+            shutil.copy2(inFilepath, outFilepath)
+            # track create in db
+            self.dataStore.create_location(location)
+
+    def move_file(self, inFilepath, outFilepath, location, priorLocation):
+        # map old inFileLocation to old outFileLocation
+        oldOutfile = self._build_sync_filepath(self.folderIn, self.folderOut, priorLocation.get_folderInLocation())
+        if os.path.exists(oldOutfile):
+            # make parent if not exists (only should happen if user edits while running)
+            make_parent_if_not_exists(outFilepath)
+            # move old outFile to new outfile
+            shutil.move(oldOutfile, outFilepath)
+            # track move in db
+            oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, oldOutfile))
+            self.dataStore.update_location(oldLocation, location)
+            if os.path.isdir(inFilepath):
+                # track move in all descendents in db
+                for newfileLoc in get_descedents(inFilepath):
+                    priorLocation = self.dataStore.read_location(self.sync, get_file_id(newfileLoc))
+                    if priorLocation:
+                        oldOutfile = self._build_sync_filepath(self.folderIn,
+                                                               self.folderOut,
+                                                               priorLocation.get_folderInLocation())
+                        oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut,
+                                                                                    self.folderIn,
+                                                                                    oldOutfile))
+                        self.dataStore.update_location(oldLocation, location)
+
+    # Outfile handler
+    # ==================================
+
+    def handle_outFile(self, outFilepath):
+        """ handles each file in the output directory to decide on deletes """
+        # build vars
+        inFilepath = self._build_sync_filepath(self.folderOut, self.folderIn, outFilepath)
+        oldLocation = Location(self.sync, self._build_sync_filepath(self.folderOut, self.folderIn, outFilepath))
+
+        # delete file/files
+        if not(os.path.exists(inFilepath)) and os.path.exists(outFilepath):
+            self.delete_file(inFilepath, outFilepath, oldLocation)
+
+    # Helpers
+    # ==================
+
+    def delete_file(self, inFilepath, outFilepath, oldLocation):
+        # only continue if it is in the waitlist (to avoid situation of move after handle_infile)
+        if outFilepath in self.waitForDelete:
+            # rm curr from waitlist
+            self.waitForDelete.remove(outFilepath)
+
+            if os.path.isdir(outFilepath):
+                # rm all descendents from waitlist
+                for fileLoc in get_descedents(outFilepath):
+                    if fileLoc in self.waitForDelete:
+                        self.waitForDelete.remove(fileLoc)
                 # rm
                 shutil.rmtree(outFilepath)
                 # track rm in db
@@ -353,6 +410,12 @@ class FolderSync:
                 os.remove(outFilepath)
                 # track rm in db
                 self.dataStore.remove_location(oldLocation)
+        else:
+            # add to waitlist
+            self.waitForDelete.add(outFilepath)
+
+    # Utilities
+    # =================================================================
 
     def _build_sync_filepath(self, rootDirIn, rootDirOut, filepathIn):
         """ takes filepath, and re-builds it under rootDirOut """
