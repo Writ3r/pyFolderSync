@@ -1,0 +1,6 @@
+@startuml
+' This is a plantUML file, you view the doc at https://www.planttext.com/
+
+title pyFolderSync Activity Diagram
+
+@enduml

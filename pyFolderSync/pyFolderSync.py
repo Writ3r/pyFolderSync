@@ -248,10 +248,7 @@ class FolderSync:
                 - if in folderOut, not in folderIn, -> delete
     """
 
-    def __init__(self,
-                 folderIn="F:\\test stuff\\syncTest\\in",
-                 folderOut="F:\\test stuff\\syncTest\\out",
-                 frequency=2):
+    def __init__(self, folderIn, folderOut, frequency=2):
 
         # set vals
         self.folderIn = EXT_PATH + folderIn
@@ -423,4 +420,4 @@ class FolderSync:
         filepathOut = rootDirOut + relativePathIn
         return filepathOut
 
-FolderSync().run()
+#FolderSync("F:\\test stuff\\syncTest\\in", "F:\\test stuff\\syncTest\\out").run()
