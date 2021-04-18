@@ -83,7 +83,7 @@ class TestPyFolderSync(unittest.TestCase):
     FOLDER_TREE = json.load(open(RESOURCES_DIR + '\\base-folder-tree.json',))
 
     TEST_WORKING_FOLDER = os.path.join(WORKING_DIR, 'TEST_WORKING_FOLDER')
-    
+
     TEST_IN_FOLDER = TEST_WORKING_FOLDER + '\\in'
     TEST_OUT_FOLDER = TEST_WORKING_FOLDER + '\\out'
 
@@ -95,7 +95,7 @@ class TestPyFolderSync(unittest.TestCase):
         os.makedirs(TestPyFolderSync.TEST_IN_FOLDER)
         os.makedirs(TestPyFolderSync.TEST_OUT_FOLDER)
         jsonToFiles(TestPyFolderSync.FOLDER_TREE, TestPyFolderSync.TEST_IN_FOLDER)
-        self.maxDiff = 1300
+        self.maxDiff = 2000
 
     def tearDown(self):
         # destroy any possible files
@@ -103,9 +103,86 @@ class TestPyFolderSync(unittest.TestCase):
             shutil.rmtree(TestPyFolderSync.TEST_WORKING_FOLDER)
 
     def test_simple_sync_files(self):
+        # sync
         pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
                                 TestPyFolderSync.TEST_OUT_FOLDER,
                                 frequency=None).run()
+        # assert equals
+        jsonStringIN = json.dumps(filesToJson(TestPyFolderSync.TEST_IN_FOLDER_ROOT))
+        jsonStringOut = json.dumps(filesToJson(TestPyFolderSync.TEST_OUT_FOLDER_ROOT))
+        self.assertEqual(jsonStringIN, jsonStringOut)
+
+    def test_create_files(self):
+        # sync
+        pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
+                                TestPyFolderSync.TEST_OUT_FOLDER,
+                                frequency=None).run()
+        # make changes
+        os.makedirs(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFolder1')
+        os.makedirs(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\testFolder2')
+        os.makedirs(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\testFolder2\\YELLO')
+        os.makedirs(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York\\YELLO')
+
+        _write_file(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFolder1\\hello.txt', "I am mister winner!!", "w")
+        _write_file(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York\\YELLO\\NOPE.txt', "I am miaaaa!!", "w")
+        _write_file(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\hello.txt', "I am mister winner!!", "w")
+
+        # sync
+        pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
+                                TestPyFolderSync.TEST_OUT_FOLDER,
+                                frequency=None).run()
+
+        # assert equals
+        jsonStringIN = json.dumps(filesToJson(TestPyFolderSync.TEST_IN_FOLDER_ROOT))
+        jsonStringOut = json.dumps(filesToJson(TestPyFolderSync.TEST_OUT_FOLDER_ROOT))
+        self.assertEqual(jsonStringIN, jsonStringOut)
+
+    def test_modify_files(self):
+        # sync
+        pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
+                                TestPyFolderSync.TEST_OUT_FOLDER,
+                                frequency=None).run()
+        # make changes
+        shutil.move(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York',
+                    TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York2')
+        shutil.move(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York2\\notes.txt',
+                    TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York2\\notes3.txt')
+        shutil.move(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\photosFun.txt',
+                    TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\nope.txt')
+        shutil.move(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFile2.txt',
+                    TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\GOSHHHH.txt')
+
+        _write_file(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\photosFun.txt', "WHAT IS HAPPENING", "w")
+        _write_file(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFile1.txt', "TEST BOIIII", "w")
+        _write_file(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFile2.txt', "TEST BOIIIIwerwer", "w")
+
+        # sync
+        pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
+                                TestPyFolderSync.TEST_OUT_FOLDER,
+                                frequency=None, deleteWaitlist=False).run()
+
+        # assert equals
+        jsonStringIN = json.dumps(filesToJson(TestPyFolderSync.TEST_IN_FOLDER_ROOT))
+        jsonStringOut = json.dumps(filesToJson(TestPyFolderSync.TEST_OUT_FOLDER_ROOT))
+        self.assertEqual(jsonStringIN, jsonStringOut)
+    
+    def test_delete_files(self):
+        # sync
+        pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
+                                TestPyFolderSync.TEST_OUT_FOLDER,
+                                frequency=None).run()
+        # make changes
+        shutil.rmtree(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\New York')
+        os.remove(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\photos\\photosFun.txt')
+        os.remove(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFile1.txt')
+        os.remove(TestPyFolderSync.TEST_IN_FOLDER_ROOT + '\\testFile2.txt')
+
+        # sync
+        pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
+                                TestPyFolderSync.TEST_OUT_FOLDER,
+                                frequency=None, deleteWaitlist=False).run()
+
+        # assert equals
         jsonStringIN = json.dumps(filesToJson(TestPyFolderSync.TEST_IN_FOLDER_ROOT))
         jsonStringOut = json.dumps(filesToJson(TestPyFolderSync.TEST_OUT_FOLDER_ROOT))
         self.assertEqual(jsonStringIN, jsonStringOut)

@@ -169,7 +169,7 @@ class DataStore:
                      (folderIn, folderOut) VALUES (?,?);""".format(SYNC_TB)
 
     LOC_TB = "location"
-    CREATE_LOC = """INSERT INTO {}
+    CREATE_LOC = """INSERT OR IGNORE INTO {}
                     (folderIn, folderOut, folderInLocation, folderInId)
                     VALUES (?,?,?,?);""".format(LOC_TB)
     READ_LOC = """SELECT * FROM {}
@@ -248,9 +248,10 @@ class FolderSync:
                 - if in folderOut, not in folderIn, -> delete
     """
 
-    def __init__(self, folderIn, folderOut, frequency=2):
+    def __init__(self, folderIn, folderOut, frequency=2, deleteWaitlist=True):
 
         # set vals
+        self.deleteWaitlist = deleteWaitlist  # waits one run for deletes to happen (more optimal in case move happens)
         self.folderIn = EXT_PATH + folderIn
         self.folderOut = EXT_PATH + folderOut
         self.sync = Sync(self.folderIn, self.folderOut)
@@ -386,15 +387,17 @@ class FolderSync:
 
     def delete_file(self, inFilepath, outFilepath, oldLocation):
         # only continue if it is in the waitlist (to avoid situation of move after handle_infile)
-        if outFilepath in self.waitForDelete:
+        if not(self.deleteWaitlist) or outFilepath in self.waitForDelete:
             # rm curr from waitlist
-            self.waitForDelete.remove(outFilepath)
+            if self.deleteWaitlist:
+                self.waitForDelete.remove(outFilepath)
 
             if os.path.isdir(outFilepath):
                 # rm all descendents from waitlist
-                for fileLoc in get_descedents(outFilepath):
-                    if fileLoc in self.waitForDelete:
-                        self.waitForDelete.remove(fileLoc)
+                if self.deleteWaitlist:
+                    for fileLoc in get_descedents(outFilepath):
+                        if fileLoc in self.waitForDelete:
+                            self.waitForDelete.remove(fileLoc)
                 # rm
                 shutil.rmtree(outFilepath)
                 # track rm in db
@@ -409,7 +412,8 @@ class FolderSync:
                 self.dataStore.remove_location(oldLocation)
         else:
             # add to waitlist
-            self.waitForDelete.add(outFilepath)
+            if self.deleteWaitlist:
+                self.waitForDelete.add(outFilepath)
 
     # Utilities
     # =================================================================
