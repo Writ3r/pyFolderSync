@@ -174,7 +174,7 @@ class DataStore:
                     VALUES (?,?,?,?);""".format(LOC_TB)
     READ_LOC = """SELECT * FROM {}
                   WHERE folderIn = ? AND folderOut = ? AND folderInId = ?;""".format(LOC_TB)
-    UPDATE_LOC = """UPDATE {} SET
+    UPDATE_LOC = """UPDATE OR IGNORE {} SET
                     folderInLocation = ? WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;""".format(LOC_TB)
     REMOVE_LOC = """DELETE FROM {}
                     WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;""".format(LOC_TB)
