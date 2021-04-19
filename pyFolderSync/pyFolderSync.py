@@ -423,5 +423,3 @@ class FolderSync:
         relativePathIn = filepathIn.split(rootDirIn, 1)[1]
         filepathOut = rootDirOut + relativePathIn
         return filepathOut
-
-#FolderSync("F:\\test stuff\\syncTest\\in", "F:\\test stuff\\syncTest\\out").run()

@@ -165,7 +165,7 @@ class TestPyFolderSync(unittest.TestCase):
         jsonStringIN = json.dumps(filesToJson(TestPyFolderSync.TEST_IN_FOLDER_ROOT))
         jsonStringOut = json.dumps(filesToJson(TestPyFolderSync.TEST_OUT_FOLDER_ROOT))
         self.assertEqual(jsonStringIN, jsonStringOut)
-    
+
     def test_delete_files(self):
         # sync
         pyFolderSync.FolderSync(TestPyFolderSync.TEST_IN_FOLDER,
