@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import io
-import pathlib
 import sqlite3
 import os
 import re
@@ -178,6 +177,8 @@ class DataStore:
                     folderInLocation = ? WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;""".format(LOC_TB)
     REMOVE_LOC = """DELETE FROM {}
                     WHERE folderIn = ? AND folderOut = ? AND folderInLocation = ?;""".format(LOC_TB)
+    REMOVE_LOCS_BY_SYNC = """DELETE FROM {}
+                             WHERE folderIn = ? AND folderOut = ?;""".format(LOC_TB)
 
     def __init__(self, dbConn):
         self.dbConn = dbConn
@@ -191,6 +192,9 @@ class DataStore:
     # SYNC
 
     def create_sync(self, sync):
+        # wipe old vals
+        self.remove_locs_by_sync(sync)
+        # create sync
         args = (sync.get_folderIn(), sync.get_folderOut())
         self.dbConn.execute(DataStore.CREATE_SYNC, args)
 
@@ -226,6 +230,11 @@ class DataStore:
                 sync.get_folderOut(),
                 loc.get_folderInLocation())
         self.dbConn.execute(DataStore.REMOVE_LOC, args)
+
+    def remove_locs_by_sync(self, sync):
+        args = (sync.get_folderIn(),
+                sync.get_folderOut())
+        self.dbConn.execute(DataStore.REMOVE_LOCS_BY_SYNC, args)
 
 # Primary Class
 # ================================================================
@@ -264,26 +273,34 @@ class FolderSync:
 
     def run(self):
 
-        # make sync
+        # clean and re-create sync
         self.dataStore.create_sync(self.sync)
 
         # run forever
         while True:
 
-            for filee in get_descedents(self.folderIn):
-                try:
-                    self.handle_inFile(filee)
-                except Exception:
-                    print("failed to deal with folderIn file:" + filee)
+            # check to make sure infile/outfile paths exist
+            if self._check_sync_integrety():
+
+                # iterate infiles to decide on creates/modifies
+                for filee in get_descedents(self.folderIn):
+                    try:
+                        if self._check_sync_integrety():
+                            self.handle_inFile(filee)
+                    except Exception:
+                        print("failed to deal with folderIn file:" + filee)
                     traceback.print_exc()
 
-            for filee in get_descedents(self.folderOut):
-                try:
-                    self.handle_outFile(filee)
-                except Exception:
-                    print("failed to deal with folderOut file:" + filee)
-                    traceback.print_exc()
+                # iterate outfiles to decide on deletes
+                for filee in get_descedents(self.folderOut):
+                    try:
+                        if self._check_sync_integrety():
+                            self.handle_outFile(filee)
+                    except Exception:
+                        print("failed to deal with folderOut file:" + filee)
+                        traceback.print_exc()
 
+            # re-run or stop
             if self.frequency:
                 time.sleep(self.frequency)
             else:
@@ -423,3 +440,6 @@ class FolderSync:
         relativePathIn = filepathIn.split(rootDirIn, 1)[1]
         filepathOut = rootDirOut + relativePathIn
         return filepathOut
+
+    def _check_sync_integrety(self):
+        return os.path.exists(self.folderIn) and os.path.exists(self.folderOut)
